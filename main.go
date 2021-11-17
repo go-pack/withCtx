@@ -18,7 +18,7 @@ func main() {
 	isOverWrite := flag.Bool("m", false, "是否覆盖")
 	output := flag.String("o", "/tmp/test.go", "输出名称")
 	flag.Parse()
-	if len(os.Args) == 0 {
+	if len(os.Args) == 1 {
 		flag.Usage()
 		return
 	}
