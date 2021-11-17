@@ -1,4 +1,4 @@
-module gopack/withctx
+module go-pack/withctx
 
 go 1.16
 
