@@ -17,6 +17,8 @@ var walkFunc = make(map[string]bool, 3)
 func main() {
 	isOverWrite := flag.Bool("m", false, "是否覆盖")
 	output := flag.String("o", "/tmp/test.go", "输出名称")
+	isExtend := flag.Bool("x", false, "是否扩展新方法")
+
 	flag.Parse()
 	if len(os.Args) == 1 {
 		flag.Usage()
@@ -65,72 +67,18 @@ func main() {
 			}
 		case *dst.FuncDecl:
 			if x.Recv != nil {
-				_, ok := walkFunc[x.Name.Name]
-				if ok {
-					return true
-				}
-				var ctxField = &dst.Field{
-					Names: []*dst.Ident{
-						{
-							Name: "ctx",
-							Obj:  &dst.Object{Kind: dst.ObjKind(token.VAR), Name: "ctx"},
-						},
-					},
-					Type: &dst.SelectorExpr{
-						X: &dst.Ident{Name: "context"}, Sel: &dst.Ident{Name: "Context"},
-					},
-				}
-				funcDecl := dst.Clone(x).(*dst.FuncDecl)
-				walkFunc[x.Name.Name] = true
-				var oldName = funcDecl.Name.Name
-				var recName = x.Recv.List[0].Names[0].Name
-				funcDecl.Name.Name = funcDecl.Name.Name + withCtx
-				if len(funcDecl.Type.Params.List) == 0 || funcDecl.Type.Params.List == nil {
-					funcDecl.Type.Params.List = append(make([]*dst.Field, 0), ctxField)
-				} else {
-					_, ok := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr)
-					if ok {
-						ctxPackage := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr).X.(*dst.Ident).Name
-						ctxPackageLib := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr).Sel.Name
-						if ctxPackage == "context" && ctxPackageLib == "Context" {
-							return false
-						}
+				if *isExtend {
+					b, done := createMethodExtend(x, withCtx, f)
+					if done {
+						return b
 					}
-					if funcDecl.Type.Params.List[0].Names[0].Name != "ctx" {
-						var fieds = make([]*dst.Field, 0)
-						fieds = append(fieds, ctxField)
-						for _, v := range funcDecl.Type.Params.List {
-							var vv = v
-							fieds = append(fieds, vv)
-						}
-						funcDecl.Type.Params.List = fieds
+				}else{
+					b, done := createMethodAppend(x)
+					if done {
+						return b
 					}
-				}
-				var args = make([]dst.Expr, 0)
-				for _, v := range x.Type.Params.List {
-					args = append(args, &dst.Ident{
-						Name: v.Names[0].Name,
-					})
-				}
-				var results = make([]*dst.CallExpr, 0)
-				results = append(results, &dst.CallExpr{
-					Fun: &dst.SelectorExpr{
-						X:   &dst.Ident{Name: recName},
-						Sel: &dst.Ident{Name: oldName},
-					},
-					Args: args,
-				})
-				var resultsExpr = make([]dst.Expr, 0)
-				for _, v := range results {
-					resultsExpr = append(resultsExpr, v)
 				}
 
-				var bodyList = make([]dst.Stmt, 0)
-				bodyList = append(bodyList, &dst.ReturnStmt{
-					Results: resultsExpr,
-				})
-				funcDecl.Body.List = bodyList
-				f.Decls = append(f.Decls, funcDecl)
 			}
 		}
 		return true
@@ -145,4 +93,115 @@ func main() {
 	}
 	// dst.Print(f)
 
+}
+
+func createMethodExtend(x *dst.FuncDecl, withCtx string, f *dst.File) (bool, bool) {
+	_, ok := walkFunc[x.Name.Name]
+	if ok {
+		return true, true
+	}
+	var ctxField = &dst.Field{
+		Names: []*dst.Ident{
+			{
+				Name: "ctx",
+				Obj:  &dst.Object{Kind: dst.ObjKind(token.VAR), Name: "ctx"},
+			},
+		},
+		Type: &dst.SelectorExpr{
+			X: &dst.Ident{Name: "context"}, Sel: &dst.Ident{Name: "Context"},
+		},
+	}
+	funcDecl := dst.Clone(x).(*dst.FuncDecl)
+	walkFunc[x.Name.Name] = true
+	var oldName = funcDecl.Name.Name
+	var recName = x.Recv.List[0].Names[0].Name
+	funcDecl.Name.Name = funcDecl.Name.Name + withCtx
+	if len(funcDecl.Type.Params.List) == 0 || funcDecl.Type.Params.List == nil {
+		funcDecl.Type.Params.List = append(make([]*dst.Field, 0), ctxField)
+	} else {
+		_, ok := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr)
+		if ok {
+			ctxPackage := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr).X.(*dst.Ident).Name
+			ctxPackageLib := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr).Sel.Name
+			if ctxPackage == "context" && ctxPackageLib == "Context" {
+				return false, true
+			}
+		}
+		if funcDecl.Type.Params.List[0].Names[0].Name != "ctx" {
+			var fieds = make([]*dst.Field, 0)
+			fieds = append(fieds, ctxField)
+			for _, v := range funcDecl.Type.Params.List {
+				var vv = v
+				fieds = append(fieds, vv)
+			}
+			funcDecl.Type.Params.List = fieds
+		}
+	}
+	var args = make([]dst.Expr, 0)
+	for _, v := range x.Type.Params.List {
+		args = append(args, &dst.Ident{
+			Name: v.Names[0].Name,
+		})
+	}
+	var results = make([]*dst.CallExpr, 0)
+	results = append(results, &dst.CallExpr{
+		Fun: &dst.SelectorExpr{
+			X:   &dst.Ident{Name: recName},
+			Sel: &dst.Ident{Name: oldName},
+		},
+		Args: args,
+	})
+	var resultsExpr = make([]dst.Expr, 0)
+	for _, v := range results {
+		resultsExpr = append(resultsExpr, v)
+	}
+
+	var bodyList = make([]dst.Stmt, 0)
+	bodyList = append(bodyList, &dst.ReturnStmt{
+		Results: resultsExpr,
+	})
+	funcDecl.Body.List = bodyList
+	f.Decls = append(f.Decls, funcDecl)
+	return false, false
+}
+func createMethodAppend(x *dst.FuncDecl) (bool, bool) {
+	_, ok := walkFunc[x.Name.Name]
+	if ok {
+		return true, true
+	}
+	var ctxField = &dst.Field{
+		Names: []*dst.Ident{
+			{
+				Name: "ctx",
+				Obj:  &dst.Object{Kind: dst.ObjKind(token.VAR), Name: "ctx"},
+			},
+		},
+		Type: &dst.SelectorExpr{
+			X: &dst.Ident{Name: "context"}, Sel: &dst.Ident{Name: "Context"},
+		},
+	}
+	funcDecl := x
+	walkFunc[x.Name.Name] = true
+	if len(funcDecl.Type.Params.List) == 0 || funcDecl.Type.Params.List == nil {
+		funcDecl.Type.Params.List = append(make([]*dst.Field, 0), ctxField)
+	} else {
+		_, ok := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr)
+		if ok {
+			ctxPackage := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr).X.(*dst.Ident).Name
+			ctxPackageLib := funcDecl.Type.Params.List[0].Type.(*dst.SelectorExpr).Sel.Name
+			if ctxPackage == "context" && ctxPackageLib == "Context" {
+				return false, true
+			}
+		}
+		if funcDecl.Type.Params.List[0].Names[0].Name != "ctx" {
+			var fieds = make([]*dst.Field, 0)
+			fieds = append(fieds, ctxField)
+			for _, v := range funcDecl.Type.Params.List {
+				var vv = v
+				fieds = append(fieds, vv)
+			}
+			funcDecl.Type.Params.List = fieds
+		}
+	}
+	return false, false
 }
