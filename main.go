@@ -11,13 +11,16 @@ import (
 	"github.com/dave/dst/decorator"
 )
 
-var walkFunc = make(map[string]bool, 3)
+var (
+	isOverWrite = flag.Bool("m", false, "是否覆盖")
+	output      = flag.String("o", "/tmp/test.go", "输出名称")
+	isExtend    = flag.Bool("x", false, "是否扩展新方法")
+	isProxy     = flag.Bool("p", false, "是否代理")
+	walkFunc    = make(map[string]bool, 3)
+)
 
 //go:generate go version
 func main() {
-	isOverWrite := flag.Bool("m", false, "是否覆盖")
-	output := flag.String("o", "/tmp/test.go", "输出名称")
-	isExtend := flag.Bool("x", false, "是否扩展新方法")
 
 	flag.Parse()
 	if len(os.Args) == 1 {
@@ -37,6 +40,9 @@ func main() {
 		panic(err)
 	}
 	var withCtx = "WithCtx"
+	if *isProxy {
+		withCtx = ""
+	}
 	// Inspect the AST and print all identifiers and literals.
 	dst.Inspect(f, func(n dst.Node) bool {
 		switch x := n.(type) {
@@ -49,6 +55,7 @@ func main() {
 		}
 		return true
 	})
+	// 添加ctx 参数
 	dst.Inspect(f, func(n dst.Node) bool {
 		switch x := n.(type) {
 		case *dst.GenDecl:
@@ -67,13 +74,24 @@ func main() {
 			}
 		case *dst.FuncDecl:
 			if x.Recv != nil {
-				if *isExtend {
-					b, done := createMethodExtend(x, withCtx, f)
+				if !(*isProxy) {
+					if *isExtend {
+						b, done := createMethodExtend(x, withCtx, f)
+						if done {
+							return b
+						}
+					} else {
+						b, done := createMethodAppend(x)
+						if done {
+							return b
+						}
+					}
+				} else {
+					b, done := createMethodAppend(x)
 					if done {
 						return b
 					}
-				}else{
-					b, done := createMethodAppend(x)
+					b, done = createMethodExtend(x, withCtx, f)
 					if done {
 						return b
 					}
@@ -113,6 +131,9 @@ func createMethodExtend(x *dst.FuncDecl, withCtx string, f *dst.File) (bool, boo
 	}
 	funcDecl := dst.Clone(x).(*dst.FuncDecl)
 	walkFunc[x.Name.Name] = true
+	if *isProxy {
+		funcDecl.Name.Name = strings.ToLower(funcDecl.Name.Name[:1]) + funcDecl.Name.Name[1:]
+	}
 	var oldName = funcDecl.Name.Name
 	var recName = x.Recv.List[0].Names[0].Name
 	funcDecl.Name.Name = funcDecl.Name.Name + withCtx
