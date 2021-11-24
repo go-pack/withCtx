@@ -12,11 +12,13 @@ import (
 )
 
 var (
-	isOverWrite = flag.Bool("m", false, "是否覆盖")
-	output      = flag.String("o", "/tmp/test.go", "输出名称")
-	isExtend    = flag.Bool("x", false, "是否扩展新方法")
-	isProxy     = flag.Bool("p", false, "是否代理")
-	walkFunc    = make(map[string]bool, 3)
+	isOverWrite  = flag.Bool("m", false, "是否覆盖")
+	output       = flag.String("o", "/tmp/test.go", "输出名称")
+	isExtend     = flag.Bool("x", false, "是否扩展新方法")
+	isAppend     = flag.Bool("a", false, "追加ctx参数")
+	isProxy      = flag.Bool("p", false, "代理追加ctx参数")
+	extendFunLog = make(map[string]bool, 3)
+	proxyFunLog  = make(map[string]bool, 3)
 )
 
 //go:generate go version
@@ -27,10 +29,15 @@ func main() {
 		flag.Usage()
 		return
 	}
+	// *isProxy = true
+	// *isOverWrite = true
 	wd, _ := os.Getwd()
 	file := os.Getenv("GOFILE")
-	pack := os.Getenv("GOFILE")
+	pack := os.Getenv("GOPACKAGE")
 	path := wd + string(os.PathSeparator) + file
+
+	// path = "/Users/chen/IdeaProjects/smm-go/internal/services/indexService.go"
+
 	fmt.Printf("wd %s file %s pack %s path %s \r\n", wd, file, pack, path)
 
 	// Create the AST by parsing src.
@@ -40,18 +47,18 @@ func main() {
 		panic(err)
 	}
 	var withCtx = "WithCtx"
-	if *isProxy {
-		withCtx = ""
-	}
+
 	// Inspect the AST and print all identifiers and literals.
 	dst.Inspect(f, func(n dst.Node) bool {
 		switch x := n.(type) {
 		case *dst.FuncDecl:
 			if strings.HasSuffix(x.Name.Name, withCtx) {
 				fnName := strings.TrimRight(x.Name.Name, withCtx)
-				walkFunc[fnName] = true
+				extendFunLog[fnName] = true
 				return true
 			}
+			fnName := x.Name.Name
+			proxyFunLog[fnName] = true
 		}
 		return true
 	})
@@ -74,29 +81,25 @@ func main() {
 			}
 		case *dst.FuncDecl:
 			if x.Recv != nil {
-				if !(*isProxy) {
-					if *isExtend {
-						b, done := createMethodExtend(x, withCtx, f)
-						if done {
-							return b
-						}
-					} else {
-						b, done := createMethodAppend(x)
-						if done {
-							return b
-						}
-					}
-				} else {
-					b, done := createMethodAppend(x)
-					if done {
-						return b
-					}
-					b, done = createMethodExtend(x, withCtx, f)
-					if done {
-						return b
-					}
-				}
+				if *isExtend {
+					createExtendMethod(x, withCtx, f)
 
+				} else if *isAppend {
+					b, done := appendMethodArg(x)
+					if done {
+						return b
+					}
+				} else if *isProxy {
+					leName := strings.ToLower(x.Name.Name[:1]) + x.Name.Name[1:]
+					upName := strings.ToUpper(x.Name.Name[:1]) + x.Name.Name[1:]
+					_, okLetter := proxyFunLog[leName]
+					_, okUpper := proxyFunLog[upName]
+					if okLetter && okUpper {
+						return true
+					}
+					appendMethodArg(x)
+					createProxyMethod(x, f)
+				}
 			}
 		}
 		return true
@@ -105,7 +108,7 @@ func main() {
 	if *isOverWrite {
 		*output = path
 	}
-	ret, err := os.OpenFile(*output, os.O_WRONLY|os.O_CREATE, 0666)
+	ret, _ := os.OpenFile(*output, os.O_WRONLY|os.O_CREATE, 0666)
 	if err := decorator.Fprint(ret, f); err != nil {
 		panic(err)
 	}
@@ -113,8 +116,8 @@ func main() {
 
 }
 
-func createMethodExtend(x *dst.FuncDecl, withCtx string, f *dst.File) (bool, bool) {
-	_, ok := walkFunc[x.Name.Name]
+func createExtendMethod(x *dst.FuncDecl, withCtx string, f *dst.File) (bool, bool) {
+	_, ok := extendFunLog[x.Name.Name]
 	if ok {
 		return true, true
 	}
@@ -130,10 +133,9 @@ func createMethodExtend(x *dst.FuncDecl, withCtx string, f *dst.File) (bool, boo
 		},
 	}
 	funcDecl := dst.Clone(x).(*dst.FuncDecl)
-	walkFunc[x.Name.Name] = true
-	if *isProxy {
-		funcDecl.Name.Name = strings.ToLower(funcDecl.Name.Name[:1]) + funcDecl.Name.Name[1:]
-	}
+	extendFunLog[x.Name.Name] = true
+	// var  = strings.ToLower(funcDecl.Name.Name[:1]) + funcDecl.Name.Name[1:]
+
 	var oldName = funcDecl.Name.Name
 	var recName = x.Recv.List[0].Names[0].Name
 	funcDecl.Name.Name = funcDecl.Name.Name + withCtx
@@ -185,8 +187,8 @@ func createMethodExtend(x *dst.FuncDecl, withCtx string, f *dst.File) (bool, boo
 	f.Decls = append(f.Decls, funcDecl)
 	return false, false
 }
-func createMethodAppend(x *dst.FuncDecl) (bool, bool) {
-	_, ok := walkFunc[x.Name.Name]
+func appendMethodArg(x *dst.FuncDecl) (bool, bool) {
+	_, ok := extendFunLog[x.Name.Name]
 	if ok {
 		return true, true
 	}
@@ -202,7 +204,7 @@ func createMethodAppend(x *dst.FuncDecl) (bool, bool) {
 		},
 	}
 	funcDecl := x
-	walkFunc[x.Name.Name] = true
+	extendFunLog[x.Name.Name] = true
 	if len(funcDecl.Type.Params.List) == 0 || funcDecl.Type.Params.List == nil {
 		funcDecl.Type.Params.List = append(make([]*dst.Field, 0), ctxField)
 	} else {
@@ -224,5 +226,48 @@ func createMethodAppend(x *dst.FuncDecl) (bool, bool) {
 			funcDecl.Type.Params.List = fieds
 		}
 	}
+	return false, false
+}
+
+func createProxyMethod(x *dst.FuncDecl, f *dst.File) (bool, bool) {
+	leName := strings.ToLower(x.Name.Name[:1]) + x.Name.Name[1:]
+	upName := strings.ToUpper(x.Name.Name[:1]) + x.Name.Name[1:]
+	_, okLetter := proxyFunLog[leName]
+	_, okUpper := proxyFunLog[upName]
+	if okLetter && okUpper {
+		return false, false
+	}
+
+	funcDecl := dst.Clone(x).(*dst.FuncDecl)
+	extendFunLog[x.Name.Name] = true
+	x.Name.Name = leName
+	var recName = x.Recv.List[0].Names[0].Name
+	funcDecl.Name.Name = upName
+
+	var args = make([]dst.Expr, 0)
+	for _, v := range x.Type.Params.List {
+		args = append(args, &dst.Ident{
+			Name: v.Names[0].Name,
+		})
+	}
+	var results = make([]*dst.CallExpr, 0)
+	results = append(results, &dst.CallExpr{
+		Fun: &dst.SelectorExpr{
+			X:   &dst.Ident{Name: recName},
+			Sel: &dst.Ident{Name: leName},
+		},
+		Args: args,
+	})
+	var resultsExpr = make([]dst.Expr, 0)
+	for _, v := range results {
+		resultsExpr = append(resultsExpr, v)
+	}
+
+	var bodyList = make([]dst.Stmt, 0)
+	bodyList = append(bodyList, &dst.ReturnStmt{
+		Results: resultsExpr,
+	})
+	funcDecl.Body.List = bodyList
+	f.Decls = append(f.Decls, funcDecl)
 	return false, false
 }
