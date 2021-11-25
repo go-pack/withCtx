@@ -237,7 +237,10 @@ func createProxyMethod(x *dst.FuncDecl, f *dst.File) (bool, bool) {
 	if okLetter && okUpper {
 		return false, false
 	}
-
+	//如果是私有方法不处理
+	if leName == strings.ToLower(x.Name.Name[:1]) {
+		return false, false
+	}
 	funcDecl := dst.Clone(x).(*dst.FuncDecl)
 	extendFunLog[x.Name.Name] = true
 	x.Name.Name = leName
